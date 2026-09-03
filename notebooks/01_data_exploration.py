@@ -336,6 +336,89 @@ def calculate_performance(daily_pnl, initial_capital):
 
     return equity_curve, drawdown, max_drawdown, sharpe
 
+# ============================================================
+# TRADE SUMMARY
+# ============================================================
+
+def build_trade_summary(trade_log, daily_pnl):
+    """
+                    trade_log.append({
+                    "event": "ENTRY",
+                    "signal_date": prices.index[t - 1],
+                    "date": prices.index[t],
+                    "position": position,
+                    "zscore": rolling_zscore.iloc[t - 1],
+                    "beta": beta_t
+                })
+    """
+    trade_summary =  []
+    for i in range(0, len(trade_log), 2):
+        entry_date = trade_log["date"].iloc[i]
+        exit_date = trade_log["date"].iloc[i + 1]
+
+        trade_pnl = daily_pnl.loc[entry_date:exit_date].sum()
+
+        trade_summary.append({
+            "entry_date": entry_date,
+            "exit_date": exit_date,
+            "position": trade_log["position"].iloc[i],
+            "days_held": (exit_date - entry_date).days,
+            "pnl" : trade_pnl,
+            "return" : trade_pnl / GROSS_NOTIONAL
+        })
+
+    trade_summary = pd.DataFrame(trade_summary)
+
+    return trade_summary
+
+def trade_summary_stats(trade_summary):
+    wins = 0
+    losses = 0
+    win_amount = 0
+    loss_amount = 0
+    best_trade = 0
+    worst_trade = 0
+
+    total_win_period = 0
+    total_loss_period = 0
+
+    total_trades = len(trade_summary)
+    for i in range(total_trades):
+        temp = trade_summary["pnl"].iloc[i] # temp is more efficient than calling trade["pnl"] every time
+        if temp > 0:
+            wins += 1
+            total_win_period += trade_summary["days_held"].iloc[i]
+            if temp > best_trade:
+                best_trade = temp
+            win_amount += temp
+        elif temp < 0:
+            losses += 1
+            total_loss_period += trade_summary["days_held"].iloc[i]
+            if temp < worst_trade:
+                worst_trade = temp
+            loss_amount += temp
+
+    print("Win rate: ", wins/total_trades)
+    print("Average winner: ", win_amount / wins)
+    print("Average loser: ", loss_amount / losses)
+    print("Profit factor: ", win_amount / abs(loss_amount))
+    print("Best trade: ", best_trade)
+    print("Worst trade: ", worst_trade)
+    print("Average win period: ", total_win_period / wins)
+    print("Average loss period: ", total_loss_period / losses)
+
+    winning_trades = trade_summary[trade_summary["pnl"] > 0]
+    losing_trades = trade_summary[trade_summary["pnl"] < 0]
+
+    print("Median win period:", winning_trades["days_held"].median())
+
+    print("Median loss period:", losing_trades["days_held"].median())
+
+    print("Longest winning trade:", winning_trades["days_held"].max())
+
+    print("Longest losing trade:", losing_trades["days_held"].max())
+    return None
+
 
 # ============================================================
 # MAIN SCRIPT
@@ -410,7 +493,8 @@ def main():
     print("Total transaction costs:", sum(daily_costs))
     print("Net PnL:", daily_pnl.sum())
 
-    print(trade_log.head(4))
+    print(trade_log.head())
+
 
     # Performance
     equity_curve, drawdown, max_drawdown, sharpe = calculate_performance(daily_pnl, INITIAL_CAPITAL)
@@ -428,6 +512,11 @@ def main():
     """
 
     print(f"Max drawdown: {max_drawdown}")
+
+    trade_summary = build_trade_summary(trade_log, daily_pnl)
+    print(trade_summary.head())
+
+    trade_summary_stats(trade_summary)
 
     drawdown.plot()
     #plt.show()
