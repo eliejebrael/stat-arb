@@ -1,107 +1,93 @@
 # Statistical Arbitrage / Pairs Trading
 
-A Python research project for building and evaluating a statistical arbitrage strategy using pairs trading.
+This repo is my implementation of a statistical arbitrage / pairs trading strategy in Python.
 
-The current implementation studies **Visa (V)** and **Mastercard (MA)** using a rolling hedge ratio, mean-reverting spread, z-score trading signals, realistic next-open execution, transaction costs, and trade-level performance analysis.
+The current version focuses on **Visa (`V`) and Mastercard (`MA`)**. The goal is not just to make a backtest that looks profitable, but to build the strategy carefully enough that the results are not driven by obvious look-ahead bias or unrealistic execution assumptions.
 
-The project is intentionally built from simple, interpretable statistical methods before moving to more advanced models.
+At the moment, the project includes rolling hedge-ratio estimation, spread construction, z-score signals, next-open execution, transaction costs, P&L accounting, risk metrics, and trade-level analysis.
 
----
-
-## Project Goals
-
-This project aims to develop a rigorous statistical arbitrage research pipeline while focusing on:
-
-- understanding the difference between correlation and cointegration
-- estimating a dynamic hedge ratio with rolling OLS
-- constructing and analyzing a mean-reverting spread
-- generating z-score based entry and exit signals
-- avoiding look-ahead bias and data leakage
-- modeling execution timing realistically
-- accounting for transaction costs
-- evaluating both portfolio-level and trade-level performance
-- testing whether observed performance is robust rather than overfit
-
-The longer-term goal is to extend the framework from a single pair to a multi-pair statistical arbitrage portfolio.
+> **Status:** work in progress. The current V/MA backtest is a research baseline, not a finished or validated trading strategy.
 
 ---
 
-## Current Strategy
+## Strategy Overview
 
-### Pair
+The strategy looks for temporary deviations in the historical relationship between Visa and Mastercard and trades the spread under the assumption that it may mean-revert.
 
-- Visa (`V`)
-- Mastercard (`MA`)
+The current baseline uses:
 
-### Data Frequency
+| Parameter | Value |
+|---|---:|
+| Pair | V / MA |
+| Data frequency | Daily |
+| OLS lookback | 252 trading days |
+| Z-score lookback | 60 trading days |
+| Entry threshold | ±2.0 |
+| Exit threshold | ±0.5 |
+| Gross notional per trade | $10,000 |
+| Transaction cost | 5 bps per transaction |
+| Execution | Next trading day open |
 
-Daily market data covering approximately 2015–2025.
+---
 
-The strategy currently uses:
+## Methodology
 
-- daily **Close** prices for statistical modeling and signal generation
-- next trading day's **Open** prices for trade execution
+### 1. Rolling hedge ratio
 
-### Hedge Ratio
-
-A rolling Ordinary Least Squares regression is estimated using a 252-trading-day lookback:
+For each day, I estimate the relationship between MA and V using rolling OLS:
 
 ```text
 MA_t = alpha_t + beta_t * V_t + epsilon_t
 ```
 
-For each day `t`, the regression only uses observations available before that day's signal calculation.
+The regression uses only observations before the current signal date. This avoids estimating historical hedge ratios with future data.
 
-The estimated `beta_t` is used as the hedge ratio.
+`beta_t` is then used as the share hedge ratio for the pair.
 
-### Spread
+### 2. Spread
 
-The spread is defined as:
+The spread is calculated as:
 
 ```text
 Spread_t = MA_t - (alpha_t + beta_t * V_t)
 ```
 
-The spread represents the deviation of Mastercard's observed price from the value implied by the rolling statistical relationship with Visa.
+Rather than trading the two stocks independently, the strategy trades deviations in this estimated relationship.
 
-### Z-Score
+### 3. Z-score
 
-The spread is standardized using a 60-day rolling mean and standard deviation:
+The spread is standardized using a rolling mean and standard deviation:
 
 ```text
 z_t = (Spread_t - rolling_mean_t) / rolling_std_t
 ```
 
-The rolling mean and standard deviation are shifted by one day so that the current observation does not contribute to its own historical benchmark.
+The rolling statistics are shifted by one day, so the current spread does not contribute to the historical mean and standard deviation used to evaluate itself.
 
-### Trading Rules
+### 4. Trading rules
 
-Current baseline rules:
+The current rules are:
 
 ```text
-Enter long spread:   z < -2
-Enter short spread:  z > +2
-Exit:                |z| < 0.5
+z < -2.0   -> long spread
+z > +2.0   -> short spread
+|z| < 0.5  -> exit
 ```
 
-Where:
+For the current positive hedge ratio:
 
-- **Long spread** = long MA, short V
-- **Short spread** = short MA, long V
+```text
+Long spread  = long MA, short V
+Short spread = short MA, long V
+```
 
-Positions remain open until the exit condition is reached.
+There is no stop-loss or time-based exit in the baseline yet.
 
 ---
 
 ## Position Sizing
 
-The strategy uses a fixed gross notional of:
-
-```text
-$10,000 per trade
-```
-
-The hedge ratio determines relative share quantities.
+The strategy allocates a fixed **$10,000 gross notional** to each trade.
 
 For a positive hedge ratio:
 
@@ -109,81 +95,70 @@ For a positive hedge ratio:
 q_V = |beta| * q_MA
 ```
 
-with:
+and:
 
 ```text
 q_MA = Gross Notional / (P_MA + |beta| * P_V)
 ```
 
-Shares are fixed at entry and remain unchanged until the position is closed.
+The share quantities are calculated at entry using the hedge ratio associated with the signal.
 
-The strategy does **not** rebalance every day as the rolling hedge ratio changes.
+Once a trade is opened, the shares are kept fixed until exit. The strategy does not rebalance every day as the rolling beta changes.
 
 ---
 
-## Execution Model
+## Execution and P&L
 
-A major focus of the project is avoiding unrealistic same-bar execution.
+One of the main changes made during development was removing same-close execution.
 
-The current timeline is:
+A signal that depends on the close of day `t` cannot realistically be executed at that same closing price. The current backtest therefore uses:
 
 ```text
 Close of day t
-    ↓
-Update spread and z-score
-    ↓
-Generate trading signal
-    ↓
+    -> calculate spread / z-score
+    -> generate signal
+
 Open of day t+1
-    ↓
-Execute entry or exit
+    -> execute entry or exit
 ```
 
-This prevents the backtest from observing a closing price and then unrealistically assuming a trade could have been executed at that same closing price.
-
-Daily P&L is decomposed into:
+P&L is split into two parts:
 
 ```text
-previous close → current open
-+
-current open → current close
+previous close -> current open
+current open   -> current close
 ```
 
-This ensures that overnight and intraday exposure are correctly attributed to the position actually held during each interval.
+This lets the backtest correctly handle entry days, holding days, and exit days without earning P&L before a position exists or after it has been closed.
 
-The accounting implementation was manually validated by reconciling daily P&L for a complete trade against direct entry-to-exit P&L, matching to floating-point precision.
+I also checked the accounting manually on a complete trade. The sum of daily P&L matched direct entry-to-exit P&L to floating-point precision.
 
 ---
 
 ## Transaction Costs
 
-The baseline transaction-cost model assumes:
+The current model charges **5 basis points** on the gross dollar value traded at both entry and exit.
 
-```text
-5 basis points per transaction
-```
+It does not yet model:
 
-Costs are applied to the actual gross dollar value traded at both entry and exit.
+- bid-ask spread
+- slippage
+- short borrow fees
+- market impact
+- execution latency
 
-Current limitations include:
-
-- no explicit bid-ask spread model
-- no slippage model
-- no short borrow fees
-- no market-impact model
-
-These will be addressed in later stages.
+Those are later realism checks rather than assumptions hidden inside the current results.
 
 ---
 
-## Current Backtest Results
+## Current Results
 
-Current baseline results for the V / MA pair:
+Current V/MA development-backtest results:
 
 | Metric | Result |
 |---|---:|
+| Initial capital / reference capital | $10,000 |
 | Net P&L | **$742.28** |
-| Initial capital | **$10,000** |
 | Transaction costs | **$537.15** |
 | Sharpe ratio | **0.173** |
 | Maximum drawdown | **-6.46%** |
@@ -195,196 +170,204 @@ Current baseline results for the V / MA pair:
 | Best trade | **$225.11** |
 | Worst trade | **-$370.03** |
 
-These results are **research results, not evidence of a production-ready trading strategy**.
+The Sharpe ratio currently uses daily P&L divided by the fixed initial capital and is annualized with `sqrt(252)`.
 
-The current Sharpe ratio and long testing horizon indicate that significant validation and refinement are still required.
+These numbers should be treated as **development results**, not out-of-sample evidence of a durable trading edge. Parameter robustness and held-out testing are still to be done.
 
 ---
 
-## Trade Duration Analysis
+## Trade-Level Analysis
 
-Trade-level analysis revealed a notable difference between winning and losing positions:
+The trade summary exposed an interesting pattern: losing trades tend to remain open much longer than winning trades.
 
-| Metric | Winning Trades | Losing Trades |
+| Holding period | Winners | Losers |
 |---|---:|---:|
-| Average holding period | **21.4 days** | **49.6 days** |
-| Median holding period | **15.5 days** | **52 days** |
-| Longest holding period | **69 days** | **82 days** |
+| Average | **21.4 calendar days** | **49.6 calendar days** |
+| Median | **15.5 calendar days** | **52 calendar days** |
+| Longest | **69 calendar days** | **82 calendar days** |
 
-This suggests that successful mean reversion tends to happen considerably faster than unsuccessful trades.
+This gives a useful hypothesis for later research: if mean reversion does not happen relatively quickly, the probability of a successful trade may deteriorate.
 
-This observation may justify future research into:
-
-- time-based exits
-- relationship-breakdown detection
-- adaptive exit rules
-
-However, these rules will not be added solely because they improve the current in-sample backtest. They must be tested for robustness and out-of-sample performance.
-
----
-
-## Research Lessons So Far
-
-Several changes materially reduced apparent performance but made the backtest more trustworthy.
-
-### Rolling rather than full-sample regression
-
-Using a single regression over the full dataset creates look-ahead bias because future prices influence historical hedge ratios.
-
-The current implementation estimates the relationship using only information available at each point in time.
-
-### Next-open execution
-
-Earlier versions effectively generated a signal from the day's close and executed at that same close.
-
-The corrected model executes at the next trading day's open.
-
-This reduced performance, as expected from removing an optimistic execution assumption.
-
-### High win rate does not imply low risk
-
-Although the current strategy wins roughly 68% of completed trades, losing trades are substantially larger and tend to remain open much longer.
-
-This illustrates why win rate alone is not a useful measure of strategy quality.
+I am not adding a time stop based on this result alone, since doing that directly on the same sample would risk tuning the strategy to historical outcomes.
 
 ---
 
 ## Statistical Diagnostics
 
-The project currently includes:
+The research script currently includes:
 
 - Augmented Dickey-Fuller testing
 - Engle-Granger cointegration testing
-- rolling OLS regression
+- rolling OLS
 - rolling spread analysis
 
-These diagnostics are treated as research tools rather than as proof that a trading relationship will remain stable in the future.
+The ADF and cointegration tests are currently used as diagnostics rather than as live trading filters.
 
-Further work will focus on stability through time and structural relationship changes.
+A later stage of the project will look more carefully at relationship stability, structural breaks, and pair selection.
 
 ---
 
-## Project Structure
+## What Changed During Development
+
+A few early versions of the backtest produced much better-looking performance, but for the wrong reasons.
+
+The most important corrections so far were:
+
+**Full-sample OLS -> rolling OLS**  
+The original regression used the entire dataset to estimate the relationship, which allowed future observations to influence historical hedge ratios.
+
+**Same-close execution -> next-open execution**  
+Signals are generated using closing data and are now executed at the following trading day's open.
+
+**Close-to-close P&L -> interval-aware P&L**  
+P&L now distinguishes overnight and intraday exposure around entries and exits.
+
+These changes reduced the reported performance, but made the backtest more realistic and much more useful as a research baseline.
+
+---
+
+## Repository Structure
 
 ```text
 stat-arb/
-│
-├── data/
-│   └── raw/
-│
-├── notebooks/
-│   └── 01_data_exploration.py
-│
-├── src/
-│
-├── tests/
-│
-├── .gitignore
-└── README.md
+|
+|-- notebooks/
+|   |-- 01_v_ma_backtest.py
+|   `-- data_download_check.py
+|
+|-- src/
+|   `-- data_download.py
+|
+|-- .gitignore
+|-- README.md
+`-- requirements.txt
 ```
 
-The current strategy is still concentrated in the research script while the methodology is being finalized. Code will be moved into reusable modules as the project matures.
+Raw market data is stored locally under:
+
+```text
+data/raw/
+```
+
+The `data/` directory is intentionally excluded from Git.
+
+---
+
+## Setup
+
+Clone the repository:
+
+```bash
+git clone https://github.com/eliejebrael/stat-arb.git
+cd stat-arb
+```
+
+Create and activate a virtual environment, then install the dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+The main dependencies are:
+
+```text
+pandas
+numpy
+matplotlib
+statsmodels
+yfinance
+```
+
+---
+
+## Downloading the Data
+
+`src/data_download.py` contains the yfinance download helper used by the project.
+
+The current backtest expects these two files under `data/raw/`:
+
+```text
+V_2015-01-02_2025-12-31.csv
+MA_2015-01-01_2026-01-01.csv
+```
+
+They can be created from the project root with:
+
+```bash
+python -c "from src.data_download import download_data; download_data('V', '2015-01-02', '2025-12-31'); download_data('MA', '2015-01-01', '2026-01-01')"
+```
+
+The download helper creates `data/raw/` automatically if it does not already exist.
+
+---
+
+## Running the Backtest
+
+The current script uses paths relative to the `notebooks/` directory, so run it from there:
+
+```bash
+cd notebooks
+python 01_v_ma_backtest.py
+```
+
+The script currently prints the main backtest metrics, the first rows of the trade log, and the trade-level statistics.
 
 ---
 
 ## Roadmap
 
-### Completed / Current Baseline
+### Completed
 
-- [x] Download and align price data
-- [x] Explore price relationships
-- [x] Study correlation vs cointegration
-- [x] Implement rolling OLS hedge ratio
-- [x] Construct rolling spread
-- [x] Implement rolling z-score
-- [x] Generate state-based entry and exit signals
-- [x] Implement hedge-ratio-based share sizing
-- [x] Keep shares fixed during each trade
-- [x] Add transaction costs
-- [x] Remove full-sample regression look-ahead bias
-- [x] Add next-open execution
-- [x] Correct overnight and intraday P&L accounting
-- [x] Calculate equity, Sharpe ratio, and drawdown
-- [x] Build trade-level summaries
-- [x] Analyze win/loss holding periods
+- [x] Historical data download and alignment
+- [x] Correlation / cointegration exploration
+- [x] Rolling OLS hedge ratio
+- [x] Spread construction
+- [x] Rolling z-score
+- [x] Stateful entry and exit logic
+- [x] Hedge-ratio-based position sizing
+- [x] Fixed shares during each trade
+- [x] Transaction costs
+- [x] Removal of full-sample look-ahead bias
+- [x] Next-open execution
+- [x] Overnight / intraday P&L accounting
+- [x] Equity curve, drawdown, and Sharpe ratio
+- [x] Trade summary
+- [x] Win/loss and holding-period analysis
 
-### Next Steps
+### Next
 
-- [ ] Analyze performance by holding-period bucket
+- [ ] Analyze trade performance by holding-period bucket
 - [ ] Test the unchanged framework on additional pairs
-- [ ] Create research / validation / test splits
+- [ ] Add research / validation / test splits
 - [ ] Study parameter robustness
 - [ ] Estimate mean-reversion half-life
-- [ ] Test time-based exits only if statistically justified
-- [ ] Add richer performance and risk metrics
-- [ ] Model slippage, spread, and borrowing costs
-- [ ] Build systematic pair-selection pipeline
-- [ ] Backtest multiple pairs simultaneously
-- [ ] Construct a portfolio-level stat-arb strategy
+- [ ] Investigate time-based exits without overfitting
+- [ ] Add more performance and risk metrics
+- [ ] Add slippage, spread, and borrow-cost assumptions
+- [ ] Build a systematic pair-selection process
+- [ ] Backtest multiple pairs
+- [ ] Build a portfolio-level stat-arb framework
 - [ ] Add automated tests
 - [ ] Refactor research code into reusable modules
-- [ ] Explore an intraday adaptation after the daily framework is validated
+- [ ] Explore intraday data after the daily framework is validated
 
 ---
 
-## Future Intraday Extension
+## Longer-Term Direction
 
-The current strategy operates on daily bars.
+The daily V/MA strategy is mainly the first research case.
 
-A future version may adapt the same statistical framework to intraday data, where models and signals would be updated throughout the trading session.
+The longer-term goal is to build a framework that can evaluate multiple candidate pairs and eventually combine them into a portfolio. After the daily version is properly validated, I also want to explore whether the same ideas can be adapted to intraday data.
 
-Moving to a higher frequency would require a complete revalidation of:
-
-- OLS lookback length
-- z-score window
-- entry and exit thresholds
-- execution assumptions
-- transaction costs
-- bid-ask spread
-- slippage
-- latency
-- market microstructure effects
-
-Intraday trading should therefore be treated as a separate research stage rather than simply compressing the daily strategy into shorter time intervals.
-
----
-
-## Technologies
-
-- Python
-- pandas
-- NumPy
-- statsmodels
-- matplotlib
-- yfinance
-
----
-
-## Running the Project
-
-Install the required Python packages:
-
-```bash
-pip install pandas numpy matplotlib statsmodels yfinance
-```
-
-Run the current research script:
-
-```bash
-python notebooks/01_v_ma_backtest.py
-```
-
-> Paths and data-download workflow may be refactored as the project moves from research into a reusable package structure.
+An intraday version would need to be treated as a separate strategy: different estimation windows, different signal behavior, and much more detailed execution-cost modeling.
 
 ---
 
 ## Disclaimer
 
-This project is for **educational and research purposes only**.
+This repository is an educational and research project.
 
-The backtest does not represent guaranteed future performance and currently omits several real-world trading costs and execution constraints. Nothing in this repository constitutes financial advice or a recommendation to trade securities.
-
----
+The backtest does not represent guaranteed future performance, and several real-world trading frictions are not yet modeled. Nothing in this repository should be interpreted as financial advice.
 
 ## Author
 
