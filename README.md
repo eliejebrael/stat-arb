@@ -371,7 +371,7 @@ pip install pandas numpy matplotlib statsmodels yfinance
 Run the current research script:
 
 ```bash
-python notebooks/01_data_exploration.py
+python notebooks/01_v_ma_backtest.py
 ```
 
 > Paths and data-download workflow may be refactored as the project moves from research into a reusable package structure.

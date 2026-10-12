@@ -13,6 +13,7 @@ def download_data(ticker, start_date, end_date, interval="1d", auto_adjust=True)
     )
 
     output_path = project_root / "data" / "raw" / f"{ticker}_{start_date}_{end_date}.csv"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     data.to_csv(output_path)
 
     return data

@@ -341,16 +341,6 @@ def calculate_performance(daily_pnl, initial_capital):
 # ============================================================
 
 def build_trade_summary(trade_log, daily_pnl):
-    """
-                    trade_log.append({
-                    "event": "ENTRY",
-                    "signal_date": prices.index[t - 1],
-                    "date": prices.index[t],
-                    "position": position,
-                    "zscore": rolling_zscore.iloc[t - 1],
-                    "beta": beta_t
-                })
-    """
     trade_summary =  []
     for i in range(0, len(trade_log), 2):
         entry_date = trade_log["date"].iloc[i]
